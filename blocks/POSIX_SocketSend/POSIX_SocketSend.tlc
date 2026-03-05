@@ -1,0 +1,20 @@
+%implements POSIX_SocketSend "C"
+
+%function Outputs(block, system) Output
+    %assign Statement = SFcnParamSettings.Statement
+    %assign DATA_NUM = CAST("Number", SFcnParamSettings.data_num)-1
+
+    char sendbuf[256];
+    
+    snprintf(sendbuf, sizeof(sendbuf), "%<Statement>",
+    %foreach i = DATA_NUM
+        %<LibBlockInputSignal(i, "", "", 0)>,
+    %endforeach
+    %<LibBlockInputSignal(DATA_NUM, "", "", 0)>);
+
+    ssize_t sent = send(cfd, sendbuf, strlen(sendbuf), MSG_NOSIGNAL);
+    if (sent <= 0) {
+        close(cfd);
+        break;
+    }
+%endfunction

@@ -1,0 +1,7 @@
+%implements PIGPIO_I2C_READ "C"
+
+%function Outputs(block, system) Output
+    %assign ADDR = CAST("Number", SFcnParamSettings.addr)
+
+    %<LibBlockOutputSignal(0, "", "", 0)> = i2cReadByteData(i2c_handle, %<ADDR>);
+%endfunction

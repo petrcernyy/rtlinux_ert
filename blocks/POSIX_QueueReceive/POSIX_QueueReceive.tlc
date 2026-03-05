@@ -1,0 +1,15 @@
+%implements POSIX_QueueReceive "C"
+
+%function Outputs(block, system) Output
+    %assign queueName = SFcnParamSettings.QueueName
+    %assign bufferEnable = CAST("Number", SFcnParamSettings.bufferEnable)
+    %assign bufferSize = CAST("Number", SFcnParamSettings.bufferSize)
+    %assign bufferName = SFcnParamSettings.bufferName
+    
+    %if bufferEnable
+        char %<bufferName>[%<bufferSize>];
+        %<LibBlockOutputSignal(0, "", "", 0)> = mq_receive(%<queueName>_handle, %<bufferName>, sizeof(%<bufferName>), NULL);
+    %else
+        %<LibBlockOutputSignal(0, "", "", 0)> = mq_receive(%<queueName>_handle, (char *)&%<LibBlockOutputSignal(1, "", "", 0)>, sizeof(double), NULL);
+    %endif
+%endfunction

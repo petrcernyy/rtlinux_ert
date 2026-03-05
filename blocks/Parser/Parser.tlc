@@ -1,0 +1,41 @@
+%implements Parser "C"
+
+%% Function : BlockInstanceSetup ================================================
+%% Abstract :
+%% Find and cache the needed Block records and names related to this block .
+%% Generate warnings if I/ O not connected .
+%%
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<string.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<stdlib.h>")>
+%endfunction
+
+%% Function : Outputs ===========================================================
+%% Abstract :
+%%
+%%
+%function Outputs(block, system) Output
+
+    ssize_t len = (ssize_t)%<LibBlockInputSignal(0, "", "", 0)>;
+    receive_buffer[len] = '\0';  // Null-terminate the string
+    float output[30];
+    int counter = 0;
+
+    char *sample = strtok(receive_buffer, ",");
+    while (sample) {
+        float x, y, z;
+        if (sscanf(sample, "%f %f %f", &x, &y, &z) == 3) {
+            output[counter++] = x;
+            output[counter++] = y;
+            output[counter++] = z;
+        }
+        sample = strtok(NULL, ",");
+    }
+    
+    %foreach i = 30
+        %<LibBlockOutputSignal(0, "", "", i)> = (double)output[%<i>];
+    %endforeach
+
+%endfunction
+%% [ EOF ] freeRTOS_task . tlc

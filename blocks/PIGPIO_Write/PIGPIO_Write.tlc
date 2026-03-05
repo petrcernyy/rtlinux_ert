@@ -1,0 +1,75 @@
+%implements PIGPIO_Write "C"
+
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<gpiod.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<unistd.h>")>
+%endfunction
+
+%function Start(block, system) Output
+    %assign IO_PIN = CAST("Number", SFcnParamSettings.io_pin)
+    %openfile buffer
+        static struct gpiod_chip *chip_%<IO_PIN> = NULL;
+        static struct gpiod_line_request *req_%<IO_PIN> = NULL;
+    %closefile buffer
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", buffer)>
+
+    if (!chip_%<IO_PIN>) {
+        const char *chip_path = "/dev/gpiochip0";
+        unsigned int offset = %<IO_PIN>;
+        struct gpiod_line_settings *settings;
+        struct gpiod_line_config *line_cfg;
+        struct gpiod_request_config *req_cfg;
+
+        chip_%<IO_PIN> = gpiod_chip_open(chip_path);
+        if (!chip_%<IO_PIN>) {
+            printf("[Error] Failed to open %s for Pin %d\n", chip_path, offset);
+        } else {
+            settings = gpiod_line_settings_new();
+            gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
+
+            line_cfg = gpiod_line_config_new();
+            gpiod_line_config_add_line_settings(line_cfg, &offset, 1, settings);
+
+            req_cfg = gpiod_request_config_new();
+
+            char consumer_name[32];
+            snprintf(consumer_name, sizeof(consumer_name), "simulink_pin_%d", offset);
+            gpiod_request_config_set_consumer(req_cfg, consumer_name);
+
+            req_%<IO_PIN> = gpiod_chip_request_lines(chip_%<IO_PIN>, req_cfg, line_cfg);
+            
+            if (!req_%<IO_PIN>) {
+                printf("[Error] Failed to request line for Pin %d\n", offset);
+            }
+
+            gpiod_line_settings_free(settings);
+            gpiod_line_config_free(line_cfg);
+            gpiod_request_config_free(req_cfg);
+        }
+    }
+%endfunction
+
+%function Outputs(block, system) Output
+    %assign IO_PIN = CAST("Number", SFcnParamSettings.io_pin)
+    %assign u1_val = LibBlockInputSignal(0, "", "", 0)
+
+    if (req_%<IO_PIN>) {
+        int val = (%<u1_val> != 0) ? 1 : 0;
+        gpiod_line_request_set_value(req_%<IO_PIN>, %<IO_PIN>, val);
+    }
+%endfunction
+
+%function Terminate(block, system) Output
+    %assign IO_PIN = CAST("Number", SFcnParamSettings.io_pin)
+
+    if (req_%<IO_PIN>) {
+        gpiod_line_request_release(req_%<IO_PIN>);
+        req_%<IO_PIN> = NULL;
+    }
+    
+    if (chip_%<IO_PIN>) {
+        gpiod_chip_close(chip_%<IO_PIN>);
+        chip_%<IO_PIN> = NULL;
+    }
+%endfunction

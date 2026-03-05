@@ -1,0 +1,170 @@
+%implements POSIX_Thread "C"
+
+%% Function : BlockInstanceSetup ================================================
+%% Abstract :
+%% Find and cache the needed Block records and names related to this block .
+%% Generate warnings if I/ O not connected .
+%%
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<pthread.h>")>
+    %<LibAddToCommonIncludes("<sched.h>")>
+    %<LibAddToCommonIncludes("<sys/mman.h>")>
+    %<LibAddToCommonIncludes("<string.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<stdlib.h>")>
+    %<LibAddToCommonIncludes("<unistd.h>")>
+    %<LibAddToCommonIncludes("<time.h>")>
+%endfunction
+
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block AsyncCallerGenCode TLC_TRUE
+    %% Get the Block for the downstream f - c ss , warn and return if there is none
+    %if LibIsEqual(SFcnSystemOutputCall.BlockToCall, "unconnected")
+        %assign wrnTxt = "The output for POSIX Task block '%<TaskBlockName>' is unconnected. No code will be generated for this block."
+        %<LibReportWarning(wrnTxt)>
+        %return
+    %endif
+    %assign SSBlock = LibGetFcnCallBlock(block, 0)
+    %addtorecord block ssBlock SSBlock
+
+    %assign taskName     = SFcnParamSettings.TaskName
+    %assign tickRes      = SFcnParamSettings.TickRes
+
+    %assign schedPolicy  = SFcnParamSettings.SchedPolicy
+    %assign rtPriority   = SFcnParamSettings.Priority
+    %assign lockMemory   = SFcnParamSettings.LockMemory
+    %assign affinity0    = SFcnParamSettings.Affinity0
+    %assign affinity1    = SFcnParamSettings.Affinity1
+    %assign affinity2    = SFcnParamSettings.Affinity2
+    %assign affinity3    = SFcnParamSettings.Affinity3
+
+    %assign block = block + taskName + tickRes + schedPolicy + rtPriority + lockMemory + affinity0 + affinity1 + affinity2 + affinity3
+
+
+%endfunction
+%% Function : Start =============================================================
+%% Abstract :
+%% Create a task with the desired parameters
+%%
+%function Start(block, system) Output
+
+    %openfile decbuf
+    pthread_t %<taskName>_t;
+    volatile int %<taskName>_running = 1;
+    #ifndef NSEC_PER_SEC
+    #define NSEC_PER_SEC 1000000000L
+    #endif
+    %closefile decbuf
+    %assign srcFile = LibGetModelDotCFile()
+    %<LibSetSourceFileSection(srcFile, "Declarations", decbuf)>
+
+    %if (lockMemory)
+    mlockall(MCL_CURRENT | MCL_FUTURE);
+    %endif
+
+    pthread_attr_t %<taskName>_attr;
+    struct sched_param %<taskName>_sp;
+
+    %if LibIsEqual(schedPolicy,"SCHED_FIFO")
+        int %<taskName>_policy = SCHED_FIFO;
+    %elseif LibIsEqual(schedPolicy,"SCHED_RR")
+        int %<taskName>_policy = SCHED_RR;
+    %elseif LibIsEqual(schedPolicy,"SCHED_OTHER")
+        int %<taskName>_policy = SCHED_OTHER;
+    %else
+        int %<taskName>_policy = SCHED_OTHER;
+    %endif
+
+    pthread_attr_init(&%<taskName>_attr);
+
+    pthread_attr_setinheritsched(&%<taskName>_attr, PTHREAD_EXPLICIT_SCHED);
+    pthread_attr_setschedpolicy(&%<taskName>_attr, %<taskName>_policy);
+
+    memset(&%<taskName>_sp, 0, sizeof(%<taskName>_sp));
+    %<taskName>_sp.sched_priority = (int)%<rtPriority>;
+    pthread_attr_setschedparam(&%<taskName>_attr, &%<taskName>_sp);
+
+    pthread_create(&%<taskName>_t, &%<taskName>_attr, %<taskName>, NULL);
+    pthread_attr_destroy(&%<taskName>_attr);
+
+    %if (affinity0 || affinity1 || affinity2 || affinity3)
+    cpu_set_t %<taskName>_set;
+    CPU_ZERO(&%<taskName>_set);
+
+    %if (affinity0)
+    CPU_SET(0, &%<taskName>_set);
+    %endif
+    %if (affinity1)
+    CPU_SET(1, &%<taskName>_set);
+    %endif
+    %if (affinity2)
+    CPU_SET(2, &%<taskName>_set);
+    %endif
+    %if (affinity3)
+    CPU_SET(3, &%<taskName>_set);
+    %endif
+    pthread_setaffinity_np(%<taskName>_t, sizeof(%<taskName>_set), &%<taskName>_set);
+    %endif
+
+%endfunction
+
+%function Terminate(block, system) Output
+    %<taskName>_running = 0;
+
+    //pthread_join(%<taskName>_t, NULL);
+
+%endfunction
+%% Function : Outputs ===========================================================
+%% Abstract :
+%%
+%%
+%function Outputs(block, system) Output
+    %if !ISFIELD(block, "ssBlock")
+        %return
+    %endif
+    
+%% Call the downstream f -c subsystem , it can inline
+%openfile tmpBuf
+%<LibBlockExecuteFcnCall(block, 0)>\
+%closefile tmpBuf
+%openfile funcbuf
+%assign SampleTime = CAST("Number", %<tickRes> * 1000000)
+/* Definition of task %<taskName> */
+void *%<taskName>(void *arg)
+{
+    int64_t period_ns = %<SampleTime>;
+    struct timespec next_wakeup_time;
+
+    struct timespec interval = {
+        .tv_sec  = (time_t)(period_ns / NSEC_PER_SEC),
+        .tv_nsec = (long)(period_ns % NSEC_PER_SEC)
+    };
+
+    clock_gettime(CLOCK_MONOTONIC, &next_wakeup_time);
+
+    while(%<taskName>_running) {
+        /* Wait until next shot.*/
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup_time, NULL);
+
+        %if WHITE_SPACE(tmpBuf)
+            /* Nothing to do for system : %<ssBlock.Name> */
+        %else
+            /* Call the system : %<ssBlock.Name> */
+            %<tmpBuf>\
+        %endif
+
+
+        /* calculate next shot: t += interval; normalize */
+        next_wakeup_time.tv_nsec += interval.tv_nsec;
+        next_wakeup_time.tv_sec  += interval.tv_sec;
+        if (next_wakeup_time.tv_nsec >= NSEC_PER_SEC) {
+            next_wakeup_time.tv_nsec -= NSEC_PER_SEC;
+            next_wakeup_time.tv_sec  += 1;
+        }
+    }
+}
+%closefile funcbuf
+%assign srcFile = LibGetModelDotCFile()
+%<LibSetSourceFileSection(srcFile, "Functions", funcbuf)>
+%endfunction
+%% [ EOF ] freeRTOS_task . tlc

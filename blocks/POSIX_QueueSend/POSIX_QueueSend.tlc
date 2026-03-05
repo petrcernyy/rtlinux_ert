@@ -1,0 +1,7 @@
+%implements POSIX_QueueSend "C"
+
+%function Outputs(block, system) Output
+    %assign queueName = SFcnParamSettings.QueueName
+    
+    mq_send(%<queueName>_handle, (char *)&%<LibBlockInputSignal(0, "", "", 0)>, sizeof(double), 0);
+%endfunction

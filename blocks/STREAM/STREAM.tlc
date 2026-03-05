@@ -1,0 +1,133 @@
+ %implements STREAM "C"
+
+
+%% Setup
+
+%function BlockTypeSetup(block, system) void
+
+  %<LibAddToCommonIncludes("<stdio.h>")>
+
+  %<LibAddToCommonIncludes("<stdlib.h>")>
+
+  %<LibAddToCommonIncludes("<stdint.h>")>
+
+%endfunction
+
+
+%% Start
+
+%function Start(block, system) Output
+
+  %assign Width = CAST("Number", SFcnParamSettings.Width)
+
+  %assign Height = CAST("Number", SFcnParamSettings.Height)
+
+  %assign FPS = CAST("Number", SFcnParamSettings.Fps)
+
+  %assign Encoder = SFcnParamSettings.Encoder
+
+
+  %openfile stream_decl
+
+  static FILE *stream_pipe = NULL;
+
+  void StreamFrame(const uint8_t *R, const uint8_t *G, const uint8_t *B)
+
+  {
+
+      int W = %<Width>;
+
+      int H = %<Height>;
+
+
+      if (!stream_pipe) {
+
+          // RPI4
+
+          const char *cmd =
+
+              "ffmpeg -loglevel error "
+
+              "-f rawvideo -pix_fmt rgb24 -s %<Width>x%<Height> -r %<FPS> -i - "
+
+              "-vf format=yuv420p "
+
+              "-c:v %<Encoder> -b:v 2M -maxrate 2M -bufsize 4M "
+
+              "-f mpegts tcp://0.0.0.0:8899?listen=1";
+
+          stream_pipe = popen(cmd, "w");
+
+          if (!stream_pipe) {
+
+              perror("popen failed");
+
+              exit(1);
+
+          }
+
+      }
+
+
+      // Loop over pixels in row-major order
+
+      for (int row = 0; row < H; ++row) {
+
+          for (int col = 0; col < W; ++col) {
+
+              // Compute index in column-major format (MATLAB-style)
+
+              int idx = col * H + row;
+
+
+              fputc(R[idx], stream_pipe);
+
+              fputc(G[idx], stream_pipe);
+
+              fputc(B[idx], stream_pipe);
+
+          }
+
+      }
+
+
+      fflush(stream_pipe);
+
+  }
+
+  %closefile stream_decl
+
+  %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", stream_decl)>
+
+%endfunction
+
+
+%% Outputs
+
+%function Outputs(block, system) Output
+
+  %assign r_ptr = LibBlockInputSignalAddr(0, "", "", 0)
+
+  %assign g_ptr = LibBlockInputSignalAddr(1, "", "", 0)
+
+  %assign b_ptr = LibBlockInputSignalAddr(2, "", "", 0)
+
+
+  const uint8_t *r_stream = (const uint8_t *)%<r_ptr>;
+
+  const uint8_t *g_stream = (const uint8_t *)%<g_ptr>;
+
+  const uint8_t *b_stream = (const uint8_t *)%<b_ptr>;
+
+
+  StreamFrame(r_stream, g_stream, b_stream);
+
+%endfunction
+
+
+
+%% Terminate
+
+%function Terminate(block, system) Output
+
+%endfunction 

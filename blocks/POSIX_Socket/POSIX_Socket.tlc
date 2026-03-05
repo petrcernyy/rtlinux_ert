@@ -1,0 +1,130 @@
+%implements POSIX_Socket "C"
+
+%% Function : BlockInstanceSetup ================================================
+%% Abstract :
+%% Find and cache the needed Block records and names related to this block .
+%% Generate warnings if I/ O not connected .
+%%
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<sys/socket.h>")>
+    %<LibAddToCommonIncludes("<sys/un.h>")>
+%endfunction
+
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block AsyncCallerGenCode TLC_TRUE
+    %% Get the Block for the downstream f - c ss , warn and return if there is none
+    %if LibIsEqual(SFcnSystemOutputCall.BlockToCall, "unconnected")
+        %assign wrnTxt = "The output for FreeRTOS Task block ’%<TaskBlockName>’ is " ...
+        "unconnected. No code will be generated for this block."
+        %<LibReportWarning(wrnTxt)>
+        %return
+    %endif
+    %assign SSBlock = LibGetFcnCallBlock(block, 0)
+    %addtorecord block ssBlock SSBlock
+
+    %% Add Task ’s Name and information to the block
+    %assign SOCKET_PATH = SFcnParamSettings.SocketName
+    %assign BACKLOG = CAST("Number", SFcnParamSettings.Backlog)
+    %assign tickRes = SFcnParamSettings.TickRes
+    %assign block = block + SOCKET_PATH
+    %assign block = block + BACKLOG
+    %assign block = block + tickRes
+%endfunction
+
+%% Function : Start =============================================================
+%% Abstract :
+%% Create a task with the desired parameters
+%%
+%function Start(block, system) Output
+
+    %openfile decbuf
+    pthread_t socket_thread;
+    int sfd;
+
+    #define SV_SOCK_PATH "%<SOCKET_PATH>"
+    #define BACKLOG %<BACKLOG>
+    %closefile decbuf
+    %assign srcFile = LibGetModelDotCFile()
+    %<LibSetSourceFileSection(srcFile, "Declarations", decbuf)>
+
+    pthread_create(&socket_thread, NULL, socket_server_thread, NULL); 
+
+%endfunction
+
+%function Terminate(block, system) Output
+
+    pthread_join(socket_thread, NULL);
+
+%endfunction
+%% Function : Outputs ===========================================================
+%% Abstract :
+%%
+%%
+%function Outputs(block, system) Output
+
+%if !ISFIELD(block, "ssBlock")
+    %return
+%endif
+
+
+    
+%% Call the downstream f -c subsystem , it can inline
+%openfile tmpBuf
+%<LibBlockExecuteFcnCall(block, 0)>\
+%closefile tmpBuf
+%assign SampleTime = CAST("Number", %<tickRes> * 1000000)
+%openfile funcbuf
+void *socket_server_thread(void *arg) {
+
+    int64_t period_ns = %<SampleTime>;
+    struct timespec next_wakeup_time;
+
+    clock_gettime(CLOCK_MONOTONIC, &next_wakeup_time);
+    
+    struct sockaddr_un addr;
+
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    remove(SV_SOCK_PATH);
+    memset(&addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, SV_SOCK_PATH, sizeof(addr.sun_path) - 1);
+
+    if (bind(sfd, (struct sockaddr *)&addr, sizeof(struct sockaddr_un)) == -1) {}
+
+    if (listen(sfd, BACKLOG) == -1) {}
+
+    while (1) {
+        int cfd = accept(sfd, NULL, NULL);
+        if (cfd == -1) continue;
+	
+        while (1) {
+            %if WHITE_SPACE(tmpBuf)
+            /* Nothing to do for system : %<ssBlock.Name> */
+            %else
+                /* Call the system : %<ssBlock.Name> */
+                %<tmpBuf>\
+            %endif
+            next_wakeup_time.tv_nsec += period_ns;
+            while (next_wakeup_time.tv_nsec >= 1000000000) {
+                ++next_wakeup_time.tv_nsec;
+                next_wakeup_time.tv_nsec -= 1000000000;
+            }
+
+            while (next_wakeup_time.tv_nsec < 0) {
+                --next_wakeup_time.tv_nsec;
+                next_wakeup_time.tv_nsec += 1000000000;
+            }
+            clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_wakeup_time, NULL);
+        }
+    }
+
+    return NULL;
+
+    close(sfd);
+}
+%closefile funcbuf
+%assign srcFile = LibGetModelDotCFile()
+%<LibSetSourceFileSection(srcFile, "Functions", funcbuf)>
+%endfunction
+%% [ EOF ] freeRTOS_task . tlc

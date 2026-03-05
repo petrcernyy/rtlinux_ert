@@ -1,0 +1,71 @@
+%% ==============================================================================
+%%
+%%
+%%
+%%
+%% Abstract:
+%%   Example main for bare board target (single rate model)
+%%
+%% Copyright 1994-2022 The MathWorks, Inc.
+%%
+%selectfile NULL_FILE
+
+%function FcnTaskingMain() void
+
+    %if GenerateSampleERTMain
+        %assign ::CompiledModel.OverrideSampleERTMain = TLC_TRUE
+    %endif
+
+    %openfile tmpBuf
+    #include "%<LibGetMdlPubHdrBaseName()>.h"
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    #include <signal.h>
+    %closefile tmpBuf
+
+    %<SLibCacheCodeToFile("mainSrc_incl", tmpBuf)>
+
+    %openfile tmpBuf
+    volatile int stop_program = 0;
+
+    void sigint_handler(int sig)
+    {
+        if (sig == SIGINT) {
+            printf("\n[Main] Ctrl+C (SIGINT) detected. Stopping...\n");
+        } else if (sig == SIGTERM) {
+            printf("\n[Main] Kill command (SIGTERM) detected. Stopping...\n");
+        } else {
+            printf("\n[Main] Signal %d detected. Stopping...\n", sig);
+        }
+
+        stop_program = 1;
+    }
+
+    int main(void)
+    {
+        signal(SIGINT, sigint_handler);
+
+        signal(SIGTERM, sigint_handler);
+
+        signal(SIGHUP, sigint_handler);
+        /* Initialize model */
+        %<LibCallModelInitialize()>
+
+        while(!stop_program) {
+            usleep(100000);
+        }
+
+        printf("[Main] Terminating...\n");
+        %<LibCallModelTerminate()>
+        printf("[Main] Done.\n");
+
+        return 0;
+    }
+    %closefile tmpBuf
+
+    %<SLibCacheCodeToFile("mainSrc_fcn_defn", tmpBuf)>
+
+    %<SetCurrentUtilsIncludesIdx("")>
+
+%endfunction

@@ -1,0 +1,33 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% 
+%% 
+%% 
+%%
+%% Abstract:
+%%   Example Embedded Coder custom file processing template.
+%%
+%%   Note: This file can contain any valid TLC code, which Embedded Coder
+%%   executes just prior to writing the generated source files to disk.
+%%   Using this template "hook" file, you are able to augment the generated
+%%   source code and create additional files.
+%%
+%% Copyright 1994-2021 The MathWorks, Inc.
+%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%selectfile NULL_FILE
+
+%%  Uncomment this TLC line to execute the example
+%%   ||   ||
+%%   ||   ||
+%%   \/   \/
+
+%assign ERTCustomFileTest = TLC_TRUE
+
+%if EXISTS(ERTCustomFileTest) && ERTCustomFileTest == TLC_TRUE
+
+    %include "create_cmakelists.tlc"
+    %include "rtlinux_main.tlc"
+
+    %<FcnTaskingMain()>
+  
+%endif

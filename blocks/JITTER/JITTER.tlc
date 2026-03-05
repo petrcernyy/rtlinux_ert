@@ -1,0 +1,103 @@
+%implements JITTER "C"
+
+%% Setup
+%function BlockTypeSetup(block, system) void
+  %<LibAddToCommonIncludes("<time.h>")>
+  %<LibAddToCommonIncludes("<stdio.h>")>
+  %<LibAddToCommonIncludes("<stdlib.h>")>
+%endfunction
+
+%% Start
+%function Start(block, system) Output
+  %assign NAME        = SFcnParamSettings.Name
+  %assign FRAME_BUFFER    = CAST("Number", SFcnParamSettings.FrameBuffer)
+
+  %openfile jit_decl
+    // --- Cyclictest Variables ---
+    static struct timespec %<NAME>_start_time = {0, 0};
+    static int %<NAME>_is_first_step = 1;
+    static unsigned long long %<NAME>_step_counter = 0;
+    
+    // --- Buffering ---
+    static double *%<NAME>_latency_buffer = NULL;
+    static int %<NAME>_sample_count = 0;
+    static const int %<NAME>_max_samples = %<FRAME_BUFFER>; 
+  %closefile jit_decl
+  %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", jit_decl)>
+
+  {
+      %<NAME>_latency_buffer = (double *)malloc(%<NAME>_max_samples * sizeof(double));
+  }
+%endfunction
+
+%% Outputs
+%function Outputs(block, system) Output
+  %assign NAME        = SFcnParamSettings.Name
+  %assign TICK_RES    = CAST("Number", SFcnParamSettings.TickRes)
+  
+  {
+      struct timespec now;
+      long long period_ns = (long long)(%<TICK_RES> * 1000000.0); // Convert ms to ns
+      double latency_us = 0.0;
+
+      // 1. Get current absolute kernel time
+      clock_gettime(CLOCK_MONOTONIC, &now);
+
+      if (%<NAME>_is_first_step) {
+          // Initialize the "Perfect Timeline" anchor point
+          %<NAME>_start_time = now;
+          %<NAME>_is_first_step = 0;
+          %<NAME>_step_counter = 0;
+          latency_us = 0.0;
+      } else {
+          // 2. Increment step counter
+          %<NAME>_step_counter++;
+
+          // 3. Calculate where we SHOULD be (The "Perfect" time)
+          // Target = Start + (Steps * Period)
+          long long total_offset_ns = %<NAME>_step_counter * period_ns;
+          
+          long long target_sec = %<NAME>_start_time.tv_sec + (total_offset_ns / 1000000000LL);
+          long long target_nsec = %<NAME>_start_time.tv_nsec + (total_offset_ns % 1000000000LL);
+
+          // Handle nsec rollover if start_time.tv_nsec was large
+          if (target_nsec >= 1000000000LL) {
+              target_sec++;
+              target_nsec -= 1000000000LL;
+          }
+
+          // 4. Calculate Latency (Now - Ideal)
+          long long diff_sec = now.tv_sec - target_sec;
+          long long diff_nsec = now.tv_nsec - target_nsec;
+
+          long long latency_ns = (diff_sec * 1000000000LL) + diff_nsec;
+          
+          // Convert to microseconds for easier reading
+          latency_us = (double)latency_ns / 1000.0;
+      }
+
+      // 5. Store in buffer
+      if (%<NAME>_latency_buffer && %<NAME>_sample_count < %<NAME>_max_samples) {
+          %<NAME>_latency_buffer[%<NAME>_sample_count++] = latency_us;
+      }
+  }
+%endfunction
+
+%% Terminate
+%function Terminate(block, system) Output
+  %assign NAME     = SFcnParamSettings.Name
+      if (%<NAME>_latency_buffer != NULL) {
+          FILE *f = fopen("%<NAME>_cyclictest.csv", "w");
+          if (f) {
+              printf("\nRT_LATENCY: Saving %d samples to %<NAME>_cyclictest.csv...\n", %<NAME>_sample_count);
+              fprintf(f, "Step,Latency_US\n");
+              for (int i = 0; i < %<NAME>_sample_count; i++) {
+                  fprintf(f, "%d,%.3f\n", i, %<NAME>_latency_buffer[i]);
+              }
+              fclose(f);
+              printf("RT_LATENCY: Save Complete.\n");
+          }
+          free(%<NAME>_latency_buffer);
+          %<NAME>_latency_buffer = NULL;
+      }
+%endfunction

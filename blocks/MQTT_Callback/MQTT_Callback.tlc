@@ -1,0 +1,109 @@
+%implements MQTT_Callback "C"
+
+%% Function : BlockInstanceSetup ================================================
+%% Abstract :
+%% Find and cache the needed Block records and names related to this block .
+%% Generate warnings if I/ O not connected .
+%%
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<string.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<stdlib.h>")>
+    %<LibAddToCommonIncludes("<mqueue.h>")>
+    %<LibAddToCommonIncludes("<MQTTClient.h>")>
+%endfunction
+
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block AsyncCallerGenCode TLC_TRUE
+
+    %% Add Task ’s Name and information to the block
+    %assign Address = SFcnParamSettings.address
+    %assign ClientID = SFcnParamSettings.clientid
+    %assign Topic = SFcnParamSettings.topic
+    %assign QOS = CAST("Number", SFcnParamSettings.qos)
+    %assign Data_n = CAST("Number", SFcnParamSettings.data_n)
+    %assign Queue_Name = SFcnParamSettings.queue_name
+    %assign Length = CAST("Number", SFcnParamSettings.length)
+    %assign block = block + Address
+    %assign block = block + ClientID
+    %assign block = block + Topic
+    %assign block = block + QOS
+    %assign block = block + Data_n
+    %assign block = block + Queue_Name
+    %assign block = block + Length
+
+%endfunction
+%% Function : Start =============================================================
+%% Abstract :
+%% Create a task with the desired parameters
+%%
+%function Start(block, system) Output
+
+    %openfile decbuf
+    mqd_t %<Queue_Name>_handle;
+
+    #define %<Queue_Name>_NAME "/%<Queue_Name>"
+
+    %closefile decbuf
+    %assign srcFile = LibGetModelDotCFile()
+    %<LibSetSourceFileSection(srcFile, "Declarations", decbuf)>
+
+    struct mq_attr attr = {
+        .mq_flags = 0,
+        .mq_maxmsg = %<Length>,
+        .mq_msgsize = 1024,
+        .mq_curmsgs = 0,
+    };
+
+    %<Queue_Name>_handle = mq_open(%<Queue_Name>_NAME, O_CREAT | O_RDWR, 0644, &attr);
+
+    %openfile decbuf
+MQTTClient client;
+    %closefile decbuf
+    %assign srcFile = LibGetModelDotCFile()
+    %<LibSetSourceFileSection(srcFile, "Declarations", decbuf)>
+
+    MQTTClient_connectOptions conn_opts = MQTTClient_connectOptions_initializer;
+
+    MQTTClient_create(&client, "%<Address>", "%<ClientID>", MQTTCLIENT_PERSISTENCE_NONE, NULL);
+    MQTTClient_setCallbacks(client, NULL, NULL, mqtt_callback, NULL);
+
+    conn_opts.keepAliveInterval = 20;
+    conn_opts.cleansession = 1;
+
+    MQTTClient_connect(client, &conn_opts);
+
+    MQTTClient_subscribe(client, "%<Topic>", %<QOS>);
+
+%endfunction
+
+%function Terminate(block, system) Output
+    mq_close(%<Queue_Name>_handle);
+    mq_unlink(%<Queue_Name>_NAME);
+
+    MQTTClient_disconnect(client, 10000);
+    MQTTClient_destroy(&client);
+%endfunction
+
+%% Function : Outputs ===========================================================
+%% Abstract :
+%%
+%%
+%function Outputs(block, system) Output
+%openfile funcbuf
+/* Definition of MQTT Callback */
+int mqtt_callback(void* context, char* topicName, int topicLen, MQTTClient_message* message)
+{
+    char *payload = (char *)message->payload;
+
+    mq_send(%<Queue_Name>_handle, payload, message->payloadlen, 0);
+
+    MQTTClient_freeMessage(&message);
+
+    return 1;
+}
+%closefile funcbuf
+%assign srcFile = LibGetModelDotCFile()
+%<LibSetSourceFileSection(srcFile, "Functions", funcbuf)>
+%endfunction
+%% [ EOF ] freeRTOS_task . tlc

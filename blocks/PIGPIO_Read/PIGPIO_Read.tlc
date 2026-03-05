@@ -1,0 +1,18 @@
+%implements PIGPIO_Read "C"
+
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<pigpio.h>")>
+%endfunction
+
+%function Start(block, system) Output
+    %assign IO_PIN = CAST("Number", SFcnParamSettings.io_pin)
+    /* Set pin %<IO_PIN> to INPUT */
+    gpioInitialise();
+    gpioSetMode(%<IO_PIN>, PI_INPUT);
+%endfunction
+
+%function Outputs(block, system) Output
+    %assign IO_PIN = CAST("Number", SFcnParamSettings.io_pin)
+    /* Reading pin %<IO_PIN> */
+    %<LibBlockOutputSignal(0, "", "", 0)> = gpioRead(%<IO_PIN>);
+%endfunction
