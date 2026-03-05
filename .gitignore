@@ -1,0 +1,6 @@
+# Ignore Simulink code generation build folders
+*_build/
+slprj/
+
+# Ignore MATLAB temporary and compiled files
+*.autosave
