@@ -24,7 +24,6 @@
 
         if (send(cfd, sendbuf, strlen(sendbuf), MSG_NOSIGNAL) <= 0) {
             close(cfd);
-            /* cfd is managed by the server thread loop */
         }
     }
 %endfunction

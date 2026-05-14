@@ -15,13 +15,11 @@
 using namespace libcamera;
 using namespace std::chrono_literals;
 
-// --- Global Variables ---
 static std::shared_ptr<Camera> camera;
 static std::unique_ptr<CameraManager> cm;
 static std::unique_ptr<FrameBufferAllocator> allocator;
 static std::vector<std::unique_ptr<Request>> requests;
 
-// CRITICAL: Config must stay alive globally
 static std::unique_ptr<CameraConfiguration> config; 
 static StreamConfiguration *streamConfig = nullptr;
 static Stream *stream = nullptr;
@@ -36,76 +34,13 @@ struct MappedPlane {
 static std::map<FrameBuffer *, std::vector<MappedPlane>> memory_cache;
 
 static PixelFormat getForcedFormat() {
-    //return formats::XRGB8888;
     return formats::BGR888;
 }
 
-/*
-static void requestComplete(Request *request) {
-    if (request->status() == Request::RequestCancelled) return;
-
-    const std::map<const Stream *, FrameBuffer *> &buffers = request->buffers();
-    auto it = buffers.find(stream);
-    if (it == buffers.end()) return;
-
-    FrameBuffer *buffer = it->second;
-
-    auto plane_it = memory_cache.find(buffer);
-    if (plane_it == memory_cache.end()) return;
-    
-    void *data = plane_it->second[0].data;
-    if (!data) return;
-
-    const int W = streamConfig->size.width;
-    const int H = streamConfig->size.height;
-    const size_t stride = streamConfig->stride;
-    
-    std::lock_guard<std::mutex> lock(imageMutex);
-    
-    if (lastImage.size() != (size_t)W * H * 3) {
-        lastImage.resize(W * H * 3);
-    }
-    
-    // Pointers to the Planar Channels (Simulink Format)
-    uint8_t *dstR = lastImage.data();
-    uint8_t *dstG = dstR + (W * H);
-    uint8_t *dstB = dstG + (W * H);
-    
-    const uint8_t *src = static_cast<uint8_t*>(data);
-
-    // Loop: Input is Row-Major XRGB, Output must be Column-Major RGB
-    for (int y = 0; y < H; ++y) {
-        const uint8_t *src_row = src + (y * stride);
-        
-        for (int x = 0; x < W; ++x) {
-            // Calculate Simulink Column-Major Index: row + col * Height
-            int dst_idx = y + (x * H);
-
-            // Read XRGB (B G R X)
-            uint8_t b = src_row[x * 4 + 0];
-            uint8_t g = src_row[x * 4 + 1];
-            uint8_t r = src_row[x * 4 + 2];
-
-            // Write to separate planes
-            dstR[dst_idx] = r;
-            dstG[dst_idx] = g;
-            dstB[dst_idx] = b;
-        }
-    }
-
-    if (running) {
-        request->reuse(Request::ReuseBuffers);
-        camera->queueRequest(request);
-    }
-}*/
-
 static uint8_t image_buffer[307200]; 
 
-// 2. Atomic Flag (Lock-free signaling)
 static std::atomic<bool> is_fresh(false);
 static std::mutex imageMutex; 
-
-// ... (keep includes and other globals) ...
 
 static void requestComplete(Request *request) {
     if (request->status() == Request::RequestCancelled) return;
@@ -120,8 +55,6 @@ static void requestComplete(Request *request) {
     void *data = plane_it->second[0].data;
     if (!data) return;
 
-    // Fixed size copy - No "resize" check needed
-    // We assume the camera is configured to 320x320 BGR888 correctly
     {
         std::lock_guard<std::mutex> lock(imageMutex);
         std::memcpy(image_buffer, data, 307200);
@@ -205,10 +138,7 @@ bool camera_wrapper_init(const CameraConfig *cfg) {
     controls.set(controls::FrameDurationLimits, { frame_time, frame_time });
 
     camera->requestCompleted.connect(requestComplete);
-    
-    // CRITICAL FIX: Set running=true BEFORE starting the camera
-    // This prevents the first frame from completing before we are "ready", 
-    // which would cause the loop to stop immediately.
+
     running = true;
 
     if (camera->start(&controls)) {
@@ -253,6 +183,5 @@ void camera_wrapper_stop() {
 const uint8_t *camera_wrapper_get_latest(size_t *size) {
     std::lock_guard<std::mutex> lock(imageMutex);
     if (size) *size = 307200;
-    // Return pointer to static buffer
     return image_buffer; 
 }

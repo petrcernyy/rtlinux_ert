@@ -52,7 +52,6 @@
     %assign y0  = LibBlockOutputSignal(0, "", "", 0)
     
     if (req_in_%<PIN>) {
-        /* Safely evaluate the libgpiod v2 enum back into a Simulink integer/boolean */
         %<y0> = (gpiod_line_request_get_value(req_in_%<PIN>, %<PIN>) == GPIOD_LINE_VALUE_ACTIVE) ? 1 : 0;
     } else {
         %<y0> = 0;

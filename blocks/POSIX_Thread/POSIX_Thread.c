@@ -109,7 +109,7 @@ static void mdlInitializeSizes(SimStruct *S)
     /* Work vectors and states */
     ssSetNumIWork(S, 1);
     ssSetNumRWork(S, 0);
-    ssSetNumPWork(S, 1); /* Assuming this will hold thread context later */
+    ssSetNumPWork(S, 1);
     
     ssSetNumSampleTimes(S, 1);
     ssSetNumContStates(S, 0);
@@ -148,11 +148,9 @@ static void mdlOutputs(SimStruct *S, int_T tid)
 
 static void mdlTerminate(SimStruct *S) 
 {
-    /* Guard against memory leaks if PWork is dynamically allocated */
     void **pwork = ssGetPWork(S);
     if (pwork != NULL && pwork[0] != NULL) {
-        /* Example: free(pwork[0]); */
-        pwork[0] = NULL; /* Clear the pointer */
+        pwork[0] = NULL;
     }
 }
 

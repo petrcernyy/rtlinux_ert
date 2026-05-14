@@ -26,21 +26,18 @@
     static int drm_fd = -1;
     static char *fbp = NULL;
     static int is_fb_ready = 0;
-    
-    // DRM hardware handles
+
     static uint32_t conn_id = 0, crtc_id = 0, fb_id = 0, dumb_handle = 0;
     static uint32_t dest_W = 800, dest_H = 480, pitch = 0;
     static struct drm_mode_modeinfo display_mode;
 
     void InitDRM(void) {
         if (is_fb_ready) return;
-        
-        // Open the DRM device (try card1 first for Pi 5, fallback to card0)
+
         drm_fd = open("/dev/dri/card1", O_RDWR | O_CLOEXEC);
         if (drm_fd < 0) drm_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
         if (drm_fd < 0) return;
 
-        // 1. Get DRM Resources (Connectors and CRTCs)
         uint32_t conns[8] = {0}, crtcs[8] = {0};
         struct drm_mode_card_res res = {0};
         res.connector_id_ptr = (uint64_t)(uintptr_t)conns;
@@ -49,9 +46,8 @@
         res.count_crtcs = 8;
         if (ioctl(drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) return;
         
-        crtc_id = crtcs[0]; // Assign to first available display controller
+        crtc_id = crtcs[0];
 
-        // 2. Find the active, connected display
         for (int i = 0; i < res.count_connectors; i++) {
             struct drm_mode_get_connector conn = {0};
             struct drm_mode_modeinfo modes[1] = {0};
@@ -60,7 +56,6 @@
             conn.count_modes = 1;
             ioctl(drm_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn);
 
-            // connection == 1 means physically connected
             if (conn.connection == 1 && conn.count_modes > 0) {
                 conn_id = conns[i];
                 display_mode = modes[0];
@@ -69,18 +64,16 @@
                 break;
             }
         }
-        if (conn_id == 0) return; // No screen detected
+        if (conn_id == 0) return;
 
-        // 3. Create Hardware "Dumb Buffer" for pixels
         struct drm_mode_create_dumb create = {0};
         create.width = dest_W;
         create.height = dest_H;
-        create.bpp = 32; // Force standard 32-bit (XRGB8888)
+        create.bpp = 32;
         if (ioctl(drm_fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) < 0) return;
         dumb_handle = create.handle;
         pitch = create.pitch;
 
-        // 4. Bind Buffer to a Framebuffer ID
         struct drm_mode_fb_cmd cmd = {0};
         cmd.width = dest_W;
         cmd.height = dest_H;
@@ -91,14 +84,12 @@
         if (ioctl(drm_fd, DRM_IOCTL_MODE_ADDFB, &cmd) < 0) return;
         fb_id = cmd.fb_id;
 
-        // 5. Map Hardware Buffer to User Space Pointer
         struct drm_mode_map_dumb map = {0};
         map.handle = dumb_handle;
         if (ioctl(drm_fd, DRM_IOCTL_MODE_MAP_DUMB, &map) < 0) return;
         fbp = (char *)mmap(0, create.size, PROT_READ | PROT_WRITE, MAP_SHARED, drm_fd, map.offset);
         if (fbp == MAP_FAILED) return;
 
-        // 6. Set CRTC (Activate the screen pipeline)
         struct drm_mode_crtc crtc_cmd = {0};
         crtc_cmd.crtc_id = crtc_id;
         crtc_cmd.fb_id = fb_id;
@@ -113,7 +104,7 @@
 
     void CleanupDRM() {
         if (fbp && fbp != MAP_FAILED) munmap(fbp, pitch * dest_H);
-        if (drm_fd >= 0) close(drm_fd); // The kernel cleans up the dumb buffer and fb_id automatically
+        if (drm_fd >= 0) close(drm_fd);
         is_fb_ready = 0;
     }
 
@@ -129,8 +120,7 @@
                 int src_x = (x * src_W) / dest_W;
                 int idx = src_x * src_H + src_y; 
                 long int loc = dest_row_offset + (x * 4); // 32bpp spacing
-                
-                // Write XRGB8888 formatted pixels
+
                 *(fbp + loc) = B[idx];
                 *(fbp + loc + 1) = G[idx];
                 *(fbp + loc + 2) = R[idx];
@@ -138,7 +128,6 @@
             }
         }
 
-        // TRIGGER THE DSI DMA FLUSH
         struct drm_mode_fb_dirty_cmd dirty = {0};
         dirty.fb_id = fb_id;
         ioctl(drm_fd, DRM_IOCTL_MODE_DIRTYFB, &dirty);

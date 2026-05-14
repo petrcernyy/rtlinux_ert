@@ -38,4 +38,3 @@
     %endforeach
 
 %endfunction
-%% [ EOF ] freeRTOS_task . tlc

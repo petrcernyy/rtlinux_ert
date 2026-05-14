@@ -109,11 +109,9 @@ static void mdlOutputs(SimStruct *S, int_T tid)
 
 static void mdlTerminate(SimStruct *S)
 {
-    /* Guard against memory leaks if PWork is dynamically allocated during simulation */
     void **pwork = ssGetPWork(S);
     if (pwork != NULL && pwork[0] != NULL) {
-        /* Example: free(pwork[0]); */
-        pwork[0] = NULL; /* Clear the pointer */
+        pwork[0] = NULL;
     }
 }
 
