@@ -44,6 +44,7 @@ target_link_libraries(rt_main PRIVATE
   ${LIBCAMERA_LIBRARIES}
   ${LIBGPIOD_LIBRARIES}
   ${TFLITE_LIB}
+  paho-mqtt3c
   pthread dl m atomic ${GST_LIBRARIES}
 )
 

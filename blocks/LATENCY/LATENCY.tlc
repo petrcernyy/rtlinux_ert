@@ -1,0 +1,82 @@
+%implements LATENCY "C"
+
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<time.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<stdlib.h>")>
+%endfunction
+
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block name        SFcnParamSettings.Name
+    %addtorecord block tickRes     SFcnParamSettings.TickRes
+    %addtorecord block frameBuffer SFcnParamSettings.FrameBuffer
+%endfunction
+
+%function Start(block, system) Output
+    %assign NAME = block.name
+    %assign FB   = CAST("Number", block.frameBuffer)
+
+    %openfile jit_decl
+    static struct timespec %<NAME>_start_ts = {0, 0};
+    static int %<NAME>_init = 1;
+    static unsigned long long %<NAME>_steps = 0;
+    static double *%<NAME>_buf = NULL;
+    static int %<NAME>_idx = 0;
+    static const int %<NAME>_limit = %<FB>; 
+    %closefile jit_decl
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", jit_decl)>
+
+    %<NAME>_buf = (double *)malloc(%<FB> * sizeof(double));
+%endfunction
+
+%function Outputs(block, system) Output
+    %assign NAME    = block.name
+    %assign TICK_NS = CAST("Number", block.tickRes * 1000000000.0)
+  
+    {
+        struct timespec now;
+        double lat_us = 0.0;
+
+        clock_gettime(CLOCK_MONOTONIC, &now);
+
+        if (%<NAME>_init) {
+            %<NAME>_start_ts = now;
+            %<NAME>_init = 0;
+            %<NAME>_steps = 0;
+        } else {
+            %<NAME>_steps++;
+            
+            long long total_ns = %<NAME>_steps * (long long)%<TICK_NS>;
+            long long target_s = %<NAME>_start_ts.tv_sec + (total_ns / 1000000000LL);
+            long long target_n = %<NAME>_start_ts.tv_nsec + (total_ns % 1000000000LL);
+
+            if (target_n >= 1000000000LL) {
+                target_s++;
+                target_n -= 1000000000LL;
+            }
+
+            long long diff_n = (now.tv_sec - target_s) * 1000000000LL + (now.tv_nsec - target_n);
+            lat_us = (double)diff_n / 1000.0;
+        }
+
+        if (%<NAME>_buf && %<NAME>_idx < %<NAME>_limit) {
+            %<NAME>_buf[%<NAME>_idx++] = lat_us;
+        }
+    }
+%endfunction
+
+%function Terminate(block, system) Output
+    %assign NAME = block.name
+    if (%<NAME>_buf != NULL) {
+        FILE *f = fopen("%<NAME>_jitter.csv", "w");
+        if (f) {
+            fprintf(f, "Step,Latency_US\n");
+            for (int i = 0; i < %<NAME>_idx; i++) {
+                fprintf(f, "%d,%.3f\n", i, %<NAME>_buf[i]);
+            }
+            fclose(f);
+        }
+        free(%<NAME>_buf);
+        %<NAME>_buf = NULL;
+    }
+%endfunction

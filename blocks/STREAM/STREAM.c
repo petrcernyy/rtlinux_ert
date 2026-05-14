@@ -3,66 +3,102 @@
 
 #include "simstruc.h"
 #include "mex.h"
+#include <string.h>
+#include <stdlib.h>
 
-#define WIDTH           (ssGetSFcnParam(S,0))
-#define HEIGHT          (ssGetSFcnParam(S,1))
-#define FPS             (ssGetSFcnParam(S,2))
-#define ENCODER         (ssGetSFcnParam(S,3))
+/* ----------------- Parameters ----------------- */
+enum { P_WIDTH = 0, P_HEIGHT, P_FPS, P_ENCODER, NPARAMS };
 
-#define NINPUTS 4
+#define WIDTH           (ssGetSFcnParam(S, P_WIDTH))
+#define HEIGHT          (ssGetSFcnParam(S, P_HEIGHT))
+#define FPS             (ssGetSFcnParam(S, P_FPS))
+#define ENCODER         (ssGetSFcnParam(S, P_ENCODER))
+#define PCOUNT          NPARAMS
 
+/* ----------------- C++ Interoperability Guard ----------------- */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ----------------- Parameter checks ----------------- */
+#define MDL_CHECK_PARAMETERS
+static void mdlCheckParameters(SimStruct *S)
+{
+    real_T w_val, h_val;
+
+    /* WIDTH, HEIGHT, and FPS checks */
+    if (!mxIsDouble(WIDTH)  || mxIsComplex(WIDTH)  || mxGetNumberOfElements(WIDTH)  != 1 ||
+        !mxIsDouble(HEIGHT) || mxIsComplex(HEIGHT) || mxGetNumberOfElements(HEIGHT) != 1 ||
+        !mxIsDouble(FPS)    || mxIsComplex(FPS)    || mxGetNumberOfElements(FPS)    != 1) {
+        ssSetErrorStatus(S, "WIDTH, HEIGHT, and FPS must be real scalars.");
+        return;
+    }
+
+    /* Validate width and height are positive */
+    w_val = *mxGetPr(WIDTH);
+    h_val = *mxGetPr(HEIGHT);
+    if (w_val <= 0.0 || h_val <= 0.0) {
+        ssSetErrorStatus(S, "WIDTH and HEIGHT must be positive.");
+        return;
+    }
+
+    /* ENCODER check */
+    if (!mxIsChar(ENCODER) || mxIsEmpty(ENCODER)) {
+        ssSetErrorStatus(S, "ENCODER must be a non-empty string.");
+        return;
+    }
+}
+
+/* ----------------- S-Function boilerplate ----------------- */
 static void mdlInitializeSizes(SimStruct *S)
 {
-    ssSetNumSFcnParams(S, NINPUTS);
+    int i;
+    int_T w, h;
+
+    /* Parameter initialization */
+    ssSetNumSFcnParams(S, PCOUNT);
     if (ssGetNumSFcnParams(S) != ssGetSFcnParamsCount(S)) {
-        return;
+        return; /* Parameter mismatch will be reported by Simulink */
     }
 
-    // Mark parameters as non-tunable (required for RTW params)
-    for (int i = 0; i < NINPUTS; ++i) {
-        ssSetSFcnParamTunable(S, i, false);
+    /* Validate parameters before proceeding */
+    mdlCheckParameters(S);
+    if (ssGetErrorStatus(S) != NULL) return;
+
+    /* Mark parameters as non-tunable (required for RTW params) */
+    for (i = 0; i < PCOUNT; i++) {
+        ssSetSFcnParamNotTunable(S, i);
     }
 
-    // Check scalar, real params (0..2: width, height, fps)
-    for (int i = 0; i < NINPUTS-1; ++i) {
-        const mxArray *p = ssGetSFcnParam(S, i);
-        if (!mxIsDouble(p) || mxIsComplex(p) || mxGetNumberOfElements(p) != 1) {
-            ssSetErrorStatus(S, "Width, Height, and FPS must be real scalars.");
-            return;
-        }
-    }
+    /* Input Port definitions (e.g., R, G, B channels) */
+    if (!ssSetNumInputPorts(S, 3)) return;
 
-    // Check encoder (must be a string)
-    const mxArray *encParam = ssGetSFcnParam(S, 3);
-    if (!mxIsChar(encParam) || mxGetM(encParam) != 1) {
-        ssSetErrorStatus(S, "Encoder must be a string (row vector).");
-        return;
-    }
+    w = (int_T)(*mxGetPr(WIDTH));
+    h = (int_T)(*mxGetPr(HEIGHT));
 
-    // Validate width and height
-    real_T width_val  = *mxGetPr(WIDTH);
-    real_T height_val = *mxGetPr(HEIGHT);
-
-    if (width_val <= 0 || height_val <= 0) {
-        ssSetErrorStatus(S, "Width and height must be positive.");
-        return;
-    }
-
-    int_T width  = (int_T) width_val;
-    int_T height = (int_T) height_val;
-
-    ssSetNumInputPorts(S, 3);
-    for (int i = 0; i < 3; ++i) {
-        ssSetInputPortMatrixDimensions(S, i, height, width);
+    for (i = 0; i < 3; i++) {
+        ssSetInputPortMatrixDimensions(S, i, h, w);
         ssSetInputPortDataType(S, i, SS_UINT8);
         ssSetInputPortDirectFeedThrough(S, i, 1);
     }
 
-    ssSetNumOutputPorts(S, 0);
-    ssSetNumSampleTimes(S, 1);
+    /* Output Port definitions */
+    if (!ssSetNumOutputPorts(S, 0)) return;
 
+    /* Explicitly initialize all work vectors and states to 0 */
+    ssSetNumIWork(S, 0);
+    ssSetNumRWork(S, 0);
+    ssSetNumPWork(S, 0);
+    ssSetNumSampleTimes(S, 1);
+    ssSetNumContStates(S, 0);
+    ssSetNumDiscStates(S, 0);
+    ssSetNumModes(S, 0);
+    ssSetNumNonsampledZCs(S, 0);
+
+    /* Execution options */
     ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE);
 }
+
 static void mdlInitializeSampleTimes(SimStruct *S)
 {
     ssSetSampleTime(S, 0, INHERITED_SAMPLE_TIME);
@@ -71,9 +107,9 @@ static void mdlInitializeSampleTimes(SimStruct *S)
 
 static void mdlOutputs(SimStruct *S, int_T tid)
 {
+    /* No simulation-time output; handled by TLC + C wrapper */
     UNUSED_ARG(S);
     UNUSED_ARG(tid);
-    // No simulation-time output; handled by TLC + C wrapper
 }
 
 static void mdlTerminate(SimStruct *S)
@@ -81,27 +117,44 @@ static void mdlTerminate(SimStruct *S)
     UNUSED_ARG(S);
 }
 
+/* ----------------- RTW: write params for TLC ----------------- */
 #if defined(MATLAB_MEX_FILE)
 #define MDL_RTW
 static void mdlRTW(SimStruct *S)
 {
-    real_T width  = *mxGetPr(WIDTH);
-    real_T height = *mxGetPr(HEIGHT);
-    real_T fps    = *mxGetPr(FPS);
-    char *encoder  = mxArrayToString(ENCODER);
+    real_T width_val;
+    real_T height_val;
+    real_T fps_val;
+    char *enc_str = mxArrayToString(ENCODER);
 
-    if (!ssWriteRTWParamSettings(S, NINPUTS,
-        SSWRITE_VALUE_NUM,  "Width",  width,
-        SSWRITE_VALUE_NUM,  "Height", height,
-        SSWRITE_VALUE_NUM,  "Fps",    fps,
-        SSWRITE_VALUE_QSTR,  "Encoder",encoder))
-    {
-        ssSetErrorStatus(S, "Failed to write RTW parameters.");
-        return;
+    if (enc_str != NULL) {
+        width_val  = *mxGetPr(WIDTH);
+        height_val = *mxGetPr(HEIGHT);
+        fps_val    = *mxGetPr(FPS);
+
+        /* Write parameters to the .rtw file for TLC to read */
+        if (!ssWriteRTWParamSettings(S, PCOUNT,
+                SSWRITE_VALUE_NUM,  "Width",   width_val,
+                SSWRITE_VALUE_NUM,  "Height",  height_val,
+                SSWRITE_VALUE_NUM,  "Fps",     fps_val,
+                SSWRITE_VALUE_QSTR, "Encoder", enc_str))
+        {
+            /* Safe failure drop-through */
+            ssSetErrorStatus(S, "Failed to write RTW parameters.");
+        }
+        mxFree(enc_str); /* Safely free string to prevent memory leaks */
+    } else {
+        ssSetErrorStatus(S, "Failed to allocate memory for ENCODER string.");
     }
+}
+#endif /* MATLAB_MEX_FILE */
+
+/* ----------------- C++ Interoperability Guard End ----------------- */
+#ifdef __cplusplus
 }
 #endif
 
+/* ----------------- Required Trailing Includes ----------------- */
 #ifdef MATLAB_MEX_FILE
 # include "simulink.c"
 #else

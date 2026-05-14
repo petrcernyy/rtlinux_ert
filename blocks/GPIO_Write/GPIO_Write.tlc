@@ -1,0 +1,71 @@
+%implements GPIO_Write "C"
+
+%function BlockTypeSetup(block, system) void
+    %<LibAddToCommonIncludes("<gpiod.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<unistd.h>")>
+%endfunction
+
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block ioPin SFcnParamSettings.io_pin
+%endfunction
+
+%function Start(block, system) Output
+    %assign PIN = CAST("Number", block.ioPin)
+    
+    %openfile buffer
+    static struct gpiod_chip *chip_%<PIN> = NULL;
+    static struct gpiod_line_request *req_%<PIN> = NULL;
+    %closefile buffer
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", buffer)>
+
+    {
+        unsigned int offset = %<PIN>;
+        struct gpiod_line_settings *settings;
+        struct gpiod_line_config *line_cfg;
+        struct gpiod_request_config *req_cfg;
+        char consumer[32];
+
+        chip_%<PIN> = gpiod_chip_open("/dev/gpiochip0");
+        if (chip_%<PIN>) {
+            settings = gpiod_line_settings_new();
+            gpiod_line_settings_set_direction(settings, GPIOD_LINE_DIRECTION_OUTPUT);
+            
+            line_cfg = gpiod_line_config_new();
+            gpiod_line_config_add_line_settings(line_cfg, &offset, 1, settings);
+            
+            req_cfg = gpiod_request_config_new();
+            snprintf(consumer, sizeof(consumer), "simulink_out_p%d", offset);
+            gpiod_request_config_set_consumer(req_cfg, consumer);
+            
+            req_%<PIN> = gpiod_chip_request_lines(chip_%<PIN>, req_cfg, line_cfg);
+            
+            gpiod_line_settings_free(settings);
+            gpiod_line_config_free(line_cfg);
+            gpiod_request_config_free(req_cfg);
+        }
+    }
+%endfunction
+
+%function Outputs(block, system) Output
+    %assign PIN = CAST("Number", block.ioPin)
+    %assign u1  = LibBlockInputSignal(0, "", "", 0)
+    
+    if (req_%<PIN>) {
+        /* Explicitly cast Simulink boolean to libgpiod v2 enum */
+        gpiod_line_request_set_value(req_%<PIN>, %<PIN>, (%<u1> != 0) ? GPIOD_LINE_VALUE_ACTIVE : GPIOD_LINE_VALUE_INACTIVE);
+    }
+%endfunction
+
+%function Terminate(block, system) Output
+    %assign PIN = CAST("Number", block.ioPin)
+    
+    if (req_%<PIN>) {
+        gpiod_line_request_release(req_%<PIN>);
+        req_%<PIN> = NULL;
+    }
+    if (chip_%<PIN>) {
+        gpiod_chip_close(chip_%<PIN>);
+        chip_%<PIN> = NULL;
+    }
+%endfunction

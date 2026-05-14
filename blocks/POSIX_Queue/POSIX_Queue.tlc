@@ -1,37 +1,40 @@
 %implements POSIX_Queue "C"
 
 %function BlockTypeSetup(block, system) void
-     %<LibAddToCommonIncludes("<mqueue.h>")>
+    %<LibAddToCommonIncludes("<mqueue.h>")>
+    %<LibAddToCommonIncludes("<fcntl.h>")>
+    %<LibAddToCommonIncludes("<sys/stat.h>")>
+%endfunction
+
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block qName SFcnParamSettings.QueueName
+    %addtorecord block qLen   SFcnParamSettings.QueueLenght
+%endfunction
+
+%function Start(block, system) Output
+    %assign name = block.qName
+    %assign len  = CAST("Number", block.qLen)
+
+    %openfile decbuf
+    mqd_t %<name>_handle;
+    #define %<name>_STR "_%<name>"
+    %closefile decbuf
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", decbuf)>
+
+    {
+        struct mq_attr attr;
+        attr.mq_flags = 0;
+        attr.mq_maxmsg = %<len>;
+        attr.mq_msgsize = sizeof(double);
+        attr.mq_curmsgs = 0;
+
+        mq_unlink(%<name>_STR);
+        %<name>_handle = mq_open(%<name>_STR, O_CREAT | O_RDWR | O_NONBLOCK, 0666, &attr);
+    }
 %endfunction
 
 %function Terminate(block, system) Output
-    %assign queueName = SFcnParamSettings.QueueName 
-
-    mq_close(%<queueName>_handle);
-    mq_unlink(%<queueName>_NAME);
-%endfunction
-
-%% Function : Start =============================================================
-%% Abstract :
-%% Create a task with the desired parameters
-%%
-%function Start(block, system) Output
-    %assign queueName = SFcnParamSettings.QueueName 
-    %assign queueLenght = CAST("Number", SFcnParamSettings.QueueLenght)
-
-    %openfile decbuf
-    mqd_t %<queueName>_handle;
-    #define %<queueName>_NAME "/%<queueName>"
-    %closefile decbuf
-    %assign srcFile = LibGetModelDotCFile()
-    %<LibSetSourceFileSection(srcFile, "Declarations", decbuf)>
-
-    struct mq_attr %<queueName>_attr = {
-        .mq_flags = 0,
-        .mq_maxmsg = %<queueLenght>,
-        .mq_msgsize = sizeof(double),
-        .mq_curmsgs = 0,
-    };
-
-    %<queueName>_handle = mq_open(%<queueName>_NAME, O_CREAT | O_RDWR | O_NONBLOCK, 0666, &%<queueName>_attr);
+    %assign name = block.qName
+    mq_close(%<name>_handle);
+    mq_unlink(%<name>_STR);
 %endfunction

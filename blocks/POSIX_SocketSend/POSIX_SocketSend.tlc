@@ -1,20 +1,30 @@
 %implements POSIX_SocketSend "C"
 
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block statement SFcnParamSettings.Statement
+    %addtorecord block dataNum   CAST("Number", SFcnParamSettings.data_num)
+%endfunction
+
 %function Outputs(block, system) Output
-    %assign Statement = SFcnParamSettings.Statement
-    %assign DATA_NUM = CAST("Number", SFcnParamSettings.data_num)-1
-
-    char sendbuf[256];
+    %assign stmt    = block.statement
+    %assign numArgs = block.dataNum
     
-    snprintf(sendbuf, sizeof(sendbuf), "%<Statement>",
-    %foreach i = DATA_NUM
-        %<LibBlockInputSignal(i, "", "", 0)>,
-    %endforeach
-    %<LibBlockInputSignal(DATA_NUM, "", "", 0)>);
+    {
+        char sendbuf[256];
+        
+        snprintf(sendbuf, sizeof(sendbuf), "%<stmt>" \
+        %if numArgs > 0
+            , \
+            %foreach i = numArgs
+                %assign u = LibBlockInputSignal(i, "", "", 0)
+                %<u>%<i == numArgs-1 ? "" : ", ">\
+            %endforeach
+        %endif
+        );
 
-    ssize_t sent = send(cfd, sendbuf, strlen(sendbuf), MSG_NOSIGNAL);
-    if (sent <= 0) {
-        close(cfd);
-        break;
+        if (send(cfd, sendbuf, strlen(sendbuf), MSG_NOSIGNAL) <= 0) {
+            close(cfd);
+            /* cfd is managed by the server thread loop */
+        }
     }
 %endfunction

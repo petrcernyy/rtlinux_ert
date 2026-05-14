@@ -1,31 +1,57 @@
-#define S_FUNCTION_NAME FPS_TRACKER
+#define S_FUNCTION_NAME GPIO_Write
 #define S_FUNCTION_LEVEL 2
 
 #include "simstruc.h"
 #include "mex.h"
 
 /* ----------------- Parameters ----------------- */
-#define PCOUNT 0
+enum { P_IO_PIN = 0, NPARAMS };
+
+#define IO_PIN          (ssGetSFcnParam(S, P_IO_PIN))
+#define PCOUNT          NPARAMS
 
 /* ----------------- C++ Interoperability Guard ----------------- */
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* ----------------- Parameter checks ----------------- */
+#define MDL_CHECK_PARAMETERS
+static void mdlCheckParameters(SimStruct *S)
+{
+    /* IO_PIN */
+    if (!mxIsDouble(IO_PIN) || mxIsComplex(IO_PIN) || mxGetNumberOfElements(IO_PIN) != 1) {
+        ssSetErrorStatus(S, "IO_PIN must be a real scalar.");
+        return;
+    }
+}
+
 /* ----------------- S-Function boilerplate ----------------- */
 static void mdlInitializeSizes(SimStruct *S)
 {
+    int i;
+
     /* Parameter initialization */
     ssSetNumSFcnParams(S, PCOUNT);
     if (ssGetNumSFcnParams(S) != ssGetSFcnParamsCount(S)) {
         return; /* Parameter mismatch will be reported by Simulink */
     }
 
-    /* Port definitions */
-    if (!ssSetNumInputPorts(S, 0)) return;
-    if (!ssSetNumOutputPorts(S, 1)) return;
+    /* Validate parameters before proceeding */
+    mdlCheckParameters(S);
+    if (ssGetErrorStatus(S) != NULL) return;
 
-    ssSetOutputPortWidth(S, 0, DYNAMICALLY_SIZED);
+    /* Make parameters non-tunable */
+    for (i = 0; i < PCOUNT; i++) {
+        ssSetSFcnParamNotTunable(S, i);
+    }
+
+    /* Port definitions */
+    if (!ssSetNumInputPorts(S, 1)) return;
+    ssSetInputPortWidth(S, 0, DYNAMICALLY_SIZED);
+    ssSetInputPortDirectFeedThrough(S, 0, 1);
+
+    if (!ssSetNumOutputPorts(S, 0)) return;
 
     /* Explicitly initialize all work vectors and states to 0 */
     ssSetNumIWork(S, 0);
@@ -38,11 +64,7 @@ static void mdlInitializeSizes(SimStruct *S)
     ssSetNumNonsampledZCs(S, 0);
 
     /* Execution options */
-    ssSetOptions(S,
-        SS_OPTION_WORKS_WITH_CODE_REUSE |
-        SS_OPTION_SFUNCTION_INLINED_FOR_RTW |
-        SS_OPTION_EXCEPTION_FREE_CODE |
-        SS_OPTION_CALL_TERMINATE_ON_EXIT);
+    ssSetOptions(S, SS_OPTION_EXCEPTION_FREE_CODE);
 }
 
 static void mdlInitializeSampleTimes(SimStruct *S)
@@ -68,8 +90,15 @@ static void mdlTerminate(SimStruct *S)
 #define MDL_RTW
 static void mdlRTW(SimStruct *S)
 {
-    /* No RTW parameters in this S-function to write */
-    UNUSED_ARG(S);
+    real_T io_pin_val = *mxGetPr(IO_PIN);
+
+    /* Write parameters to the .rtw file for TLC to read */
+    if (!ssWriteRTWParamSettings(S, 1, 
+            SSWRITE_VALUE_NUM, "io_pin", io_pin_val)) 
+    {
+        /* Safe failure drop-through */
+        ssSetErrorStatus(S, "Failed to write RTW parameters.");
+    }
 }
 #endif /* MATLAB_MEX_FILE */
 
@@ -79,8 +108,8 @@ static void mdlRTW(SimStruct *S)
 #endif
 
 /* ----------------- Required Trailing Includes ----------------- */
-#ifdef MATLAB_MEX_FILE
-# include "simulink.c"
+#ifdef MATLAB_MEX_FILE 
+#include "simulink.c" 
 #else
-# include "cg_sfun.h"
+#include "cg_sfun.h" 
 #endif

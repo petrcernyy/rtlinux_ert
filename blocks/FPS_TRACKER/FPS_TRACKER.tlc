@@ -1,38 +1,41 @@
 %implements FPS_TRACKER "C"
 
-%% Setup
 %function BlockTypeSetup(block, system) void
-  %<LibAddToCommonIncludes("<time.h>")>
-  %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<time.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
 %endfunction
 
-%% Start
 %function Start(block, system) Output
-  %openfile fps_decl
-  static int frameCounter = 0;
-  static double fps = 0.0;
-  static struct timespec fps_start_time;
-  %closefile fps_decl
-  %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", fps_decl)>
+    %openfile fps_decl
+    static int frame_cnt = 0;
+    static double current_fps = 0.0;
+    static struct timespec fps_start_ts;
+    %closefile fps_decl
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", fps_decl)>
+
+    clock_gettime(CLOCK_MONOTONIC, &fps_start_ts);
 %endfunction
 
-%% Outputs
 %function Outputs(block, system) Output
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
+    %assign y0 = LibBlockOutputSignal(0, "", "", 0)
+    {
+        struct timespec now;
+        double elapsed;
 
-  frameCounter++;
-  double elapsed_sec = (now.tv_sec - fps_start_time.tv_sec) +
-                        (now.tv_nsec - fps_start_time.tv_nsec) / 1e9;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        frame_cnt++;
+        
+        elapsed = (double)(now.tv_sec - fps_start_ts.tv_sec) + 
+                  (double)(now.tv_nsec - fps_start_ts.tv_nsec) / 1e9;
 
-  if (elapsed_sec >= 1.0) {
-    fps = frameCounter / elapsed_sec;
-    frameCounter = 0;
-    fps_start_time = now;
-    %<LibBlockOutputSignal(0, "", "", 0)> = fps;
-  }
+        if (elapsed >= 1.0) {
+            current_fps = (double)frame_cnt / elapsed;
+            frame_cnt = 0;
+            fps_start_ts = now;
+        }
+        %<y0> = current_fps;
+    }
 %endfunction
 
-%% Terminate
 %function Terminate(block, system) Output
 %endfunction

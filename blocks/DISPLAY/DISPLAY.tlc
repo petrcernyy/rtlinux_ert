@@ -1,138 +1,161 @@
 %implements DISPLAY "C"
 
-%% Setup
 %function BlockTypeSetup(block, system) void
-  %<LibAddToCommonIncludes("<stdlib.h>")>
-  %<LibAddToCommonIncludes("<stdint.h>")>
-  %<LibAddToCommonIncludes("<stdio.h>")>
-  %<LibAddToCommonIncludes("<fcntl.h>")>
-  %<LibAddToCommonIncludes("<unistd.h>")>
-  %<LibAddToCommonIncludes("<sys/ioctl.h>")>
-  %<LibAddToCommonIncludes("<sys/mman.h>")>
-  %<LibAddToCommonIncludes("<linux/fb.h>")>
-  %<LibAddToCommonIncludes("<string.h>")>
+    %<LibAddToCommonIncludes("<stdlib.h>")>
+    %<LibAddToCommonIncludes("<stdint.h>")>
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<fcntl.h>")>
+    %<LibAddToCommonIncludes("<unistd.h>")>
+    %<LibAddToCommonIncludes("<sys/ioctl.h>")>
+    %<LibAddToCommonIncludes("<sys/mman.h>")>
+    %<LibAddToCommonIncludes("<string.h>")>
+    %<LibAddToCommonIncludes("<drm/drm.h>")>
+    %<LibAddToCommonIncludes("<drm/drm_mode.h>")>
 %endfunction
 
-%% Start: Initialize FB HERE (Safe Zone)
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block width  SFcnParamSettings.Width
+    %addtorecord block height SFcnParamSettings.Height
+%endfunction
+
 %function Start(block, system) Output
-  %assign Width  = CAST("Number", SFcnParamSettings.Width)
-  %assign Height = CAST("Number", SFcnParamSettings.Height)
+    %assign W = CAST("Number", block.width)
+    %assign H = CAST("Number", block.height)
 
-  %openfile stream_decl
-  // --- GLOBALS ---
-  static int fbfd = -1;
-  static char *fbp = NULL;
-  static struct fb_var_screeninfo vinfo;
-  static struct fb_fix_screeninfo finfo;
-  static long int screensize = 0;
-  static int is_fb_ready = 0;
+    %openfile stream_decl
+    static int drm_fd = -1;
+    static char *fbp = NULL;
+    static int is_fb_ready = 0;
+    
+    // DRM hardware handles
+    static uint32_t conn_id = 0, crtc_id = 0, fb_id = 0, dumb_handle = 0;
+    static uint32_t dest_W = 800, dest_H = 480, pitch = 0;
+    static struct drm_mode_modeinfo display_mode;
 
-  // --- INIT FUNCTION ---
-  void InitFB(void) {
-      if (is_fb_ready) return;
+    void InitDRM(void) {
+        if (is_fb_ready) return;
+        
+        // Open the DRM device (try card1 first for Pi 5, fallback to card0)
+        drm_fd = open("/dev/dri/card1", O_RDWR | O_CLOEXEC);
+        if (drm_fd < 0) drm_fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+        if (drm_fd < 0) return;
 
-      // 1. Open Device
-      fbfd = open("/dev/fb0", O_RDWR);
-      if (fbfd == -1) {
-          printf("[Display] Error: cannot open /dev/fb0\n");
-          return;
-      }
+        // 1. Get DRM Resources (Connectors and CRTCs)
+        uint32_t conns[8] = {0}, crtcs[8] = {0};
+        struct drm_mode_card_res res = {0};
+        res.connector_id_ptr = (uint64_t)(uintptr_t)conns;
+        res.count_connectors = 8;
+        res.crtc_id_ptr = (uint64_t)(uintptr_t)crtcs;
+        res.count_crtcs = 8;
+        if (ioctl(drm_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) < 0) return;
+        
+        crtc_id = crtcs[0]; // Assign to first available display controller
 
-      // 2. Get Screen Info
-      if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) {
-          printf("[Display] Error reading fixed info.\n");
-          return;
-      }
-      if (ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == -1) {
-          printf("[Display] Error reading variable info.\n");
-          return;
-      }
+        // 2. Find the active, connected display
+        for (int i = 0; i < res.count_connectors; i++) {
+            struct drm_mode_get_connector conn = {0};
+            struct drm_mode_modeinfo modes[1] = {0};
+            conn.connector_id = conns[i];
+            conn.modes_ptr = (uint64_t)(uintptr_t)modes;
+            conn.count_modes = 1;
+            ioctl(drm_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn);
 
-      // 3. Map to Memory
-      screensize = vinfo.xres * vinfo.yres * vinfo.bits_per_pixel / 8;
-      fbp = (char *)mmap(0, screensize, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
-      
-      if ((long)fbp == -1) {
-          printf("[Display] Error: failed to map framebuffer.\n");
-          return;
-      }
+            // connection == 1 means physically connected
+            if (conn.connection == 1 && conn.count_modes > 0) {
+                conn_id = conns[i];
+                display_mode = modes[0];
+                dest_W = display_mode.hdisplay;
+                dest_H = display_mode.vdisplay;
+                break;
+            }
+        }
+        if (conn_id == 0) return; // No screen detected
 
-      // 4. Clear Screen to Black
-      memset(fbp, 0, screensize);
-      
-      printf("[Display] Initialized: %dx%d, %dbpp\n", vinfo.xres, vinfo.yres, vinfo.bits_per_pixel);
-      is_fb_ready = 1;
-  }
+        // 3. Create Hardware "Dumb Buffer" for pixels
+        struct drm_mode_create_dumb create = {0};
+        create.width = dest_W;
+        create.height = dest_H;
+        create.bpp = 32; // Force standard 32-bit (XRGB8888)
+        if (ioctl(drm_fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) < 0) return;
+        dumb_handle = create.handle;
+        pitch = create.pitch;
 
-  // --- CLEANUP ---
-  void CleanupFB() {
-      if (fbp && fbp != (char*)-1) {
-          munmap(fbp, screensize);
-          fbp = NULL;
-      }
-      if (fbfd >= 0) {
-          close(fbfd);
-          fbfd = -1;
-      }
-      is_fb_ready = 0;
-  }
+        // 4. Bind Buffer to a Framebuffer ID
+        struct drm_mode_fb_cmd cmd = {0};
+        cmd.width = dest_W;
+        cmd.height = dest_H;
+        cmd.pitch = pitch;
+        cmd.bpp = 32;
+        cmd.depth = 24;
+        cmd.handle = dumb_handle;
+        if (ioctl(drm_fd, DRM_IOCTL_MODE_ADDFB, &cmd) < 0) return;
+        fb_id = cmd.fb_id;
 
-  // --- STREAM FUNCTION (FAST) ---
-  void StreamFrame(const uint8_t *R, const uint8_t *G, const uint8_t *B)
-  {
-      // Safety Check
-      if (!is_fb_ready || !fbp) return;
+        // 5. Map Hardware Buffer to User Space Pointer
+        struct drm_mode_map_dumb map = {0};
+        map.handle = dumb_handle;
+        if (ioctl(drm_fd, DRM_IOCTL_MODE_MAP_DUMB, &map) < 0) return;
+        fbp = (char *)mmap(0, create.size, PROT_READ | PROT_WRITE, MAP_SHARED, drm_fd, map.offset);
+        if (fbp == MAP_FAILED) return;
 
-      int src_W = %<Width>;
-      int src_H = %<Height>;
-      int dest_W = vinfo.xres;
-      int dest_H = vinfo.yres;
-      int bpp = vinfo.bits_per_pixel / 8;
+        // 6. Set CRTC (Activate the screen pipeline)
+        struct drm_mode_crtc crtc_cmd = {0};
+        crtc_cmd.crtc_id = crtc_id;
+        crtc_cmd.fb_id = fb_id;
+        crtc_cmd.mode = display_mode;
+        crtc_cmd.mode_valid = 1;
+        crtc_cmd.count_connectors = 1;
+        crtc_cmd.set_connectors_ptr = (uint64_t)(uintptr_t)&conn_id;
+        ioctl(drm_fd, DRM_IOCTL_MODE_SETCRTC, &crtc_cmd);
 
-      // Scaling Loop
-      for (int y = 0; y < dest_H; ++y) {
-          int src_y = (y * src_H) / dest_H;
-          long int dest_row_offset = y * finfo.line_length;
-          
-          for (int x = 0; x < dest_W; ++x) {
-              int src_x = (x * src_W) / dest_W;
-              int idx = src_x * src_H + src_y; // Column Major
+        is_fb_ready = 1;
+    }
 
-              long int location = dest_row_offset + x * bpp;
+    void CleanupDRM() {
+        if (fbp && fbp != MAP_FAILED) munmap(fbp, pitch * dest_H);
+        if (drm_fd >= 0) close(drm_fd); // The kernel cleans up the dumb buffer and fb_id automatically
+        is_fb_ready = 0;
+    }
 
-              if (vinfo.bits_per_pixel == 16) {
-                  uint8_t r = R[idx];
-                  uint8_t g = G[idx];
-                  uint8_t b = B[idx];
-                  unsigned short int t = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
-                  *((unsigned short int*)(fbp + location)) = t;
-              }
-              else if (vinfo.bits_per_pixel == 32) {
-                  *(fbp + location)     = B[idx];
-                  *(fbp + location + 1) = G[idx];
-                  *(fbp + location + 2) = R[idx];
-                  *(fbp + location + 3) = 255;
-              }
-          }
-      }
-  }
-  %closefile stream_decl
-  %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", stream_decl)>
-  
-  // CALL INIT HERE (Before the loop starts!)
-  InitFB();
+    void StreamFrame(const uint8_t *R, const uint8_t *G, const uint8_t *B) {
+        if (!is_fb_ready || !fbp) return;
+        int src_W = %<W>;
+        int src_H = %<H>;
+
+        for (int y = 0; y < dest_H; ++y) {
+            int src_y = (y * src_H) / dest_H;
+            long int dest_row_offset = y * pitch;
+            for (int x = 0; x < dest_W; ++x) {
+                int src_x = (x * src_W) / dest_W;
+                int idx = src_x * src_H + src_y; 
+                long int loc = dest_row_offset + (x * 4); // 32bpp spacing
+                
+                // Write XRGB8888 formatted pixels
+                *(fbp + loc) = B[idx];
+                *(fbp + loc + 1) = G[idx];
+                *(fbp + loc + 2) = R[idx];
+                *(fbp + loc + 3) = 255;
+            }
+        }
+
+        // TRIGGER THE DSI DMA FLUSH
+        struct drm_mode_fb_dirty_cmd dirty = {0};
+        dirty.fb_id = fb_id;
+        ioctl(drm_fd, DRM_IOCTL_MODE_DIRTYFB, &dirty);
+    }
+    %closefile stream_decl
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", stream_decl)>
+    
+    InitDRM();
 %endfunction
 
-%% Outputs
 %function Outputs(block, system) Output
-  %assign r_ptr = LibBlockInputSignalAddr(0, "", "", 0)
-  %assign g_ptr = LibBlockInputSignalAddr(1, "", "", 0)
-  %assign b_ptr = LibBlockInputSignalAddr(2, "", "", 0)
-
-  StreamFrame((const uint8_t *)%<r_ptr>, (const uint8_t *)%<g_ptr>, (const uint8_t *)%<b_ptr>);
+    %assign r_ptr = LibBlockInputSignalAddr(0, "", "", 0)
+    %assign g_ptr = LibBlockInputSignalAddr(1, "", "", 0)
+    %assign b_ptr = LibBlockInputSignalAddr(2, "", "", 0)
+    StreamFrame((const uint8_t *)%<r_ptr>, (const uint8_t *)%<g_ptr>, (const uint8_t *)%<b_ptr>);
 %endfunction
 
-%% Terminate
 %function Terminate(block, system) Output
-   CleanupFB();
+    CleanupDRM();
 %endfunction

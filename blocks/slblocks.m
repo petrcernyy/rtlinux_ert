@@ -1,4 +1,4 @@
 function blkStruct = slblocks
-    Browser.Library = "LINUX_Library";
-    Browser.Name = "LINUX Library";
+    Browser.Library = "rtlinux_Library";
+    Browser.Name = "RT-Linux Library";
     blkStruct.Browser = Browser;

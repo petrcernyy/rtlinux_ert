@@ -42,7 +42,7 @@
     %openfile decbuf
     mqd_t %<Queue_Name>_handle;
 
-    #define %<Queue_Name>_NAME "/%<Queue_Name>"
+    #define %<Queue_Name>_NAME "_%<Queue_Name>"
 
     %closefile decbuf
     %assign srcFile = LibGetModelDotCFile()
@@ -58,7 +58,7 @@
     %<Queue_Name>_handle = mq_open(%<Queue_Name>_NAME, O_CREAT | O_RDWR, 0644, &attr);
 
     %openfile decbuf
-MQTTClient client;
+    MQTTClient client;
     %closefile decbuf
     %assign srcFile = LibGetModelDotCFile()
     %<LibSetSourceFileSection(srcFile, "Declarations", decbuf)>

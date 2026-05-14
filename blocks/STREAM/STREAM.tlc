@@ -1,133 +1,64 @@
- %implements STREAM "C"
-
-
-%% Setup
+%implements STREAM "C"
 
 %function BlockTypeSetup(block, system) void
-
-  %<LibAddToCommonIncludes("<stdio.h>")>
-
-  %<LibAddToCommonIncludes("<stdlib.h>")>
-
-  %<LibAddToCommonIncludes("<stdint.h>")>
-
+    %<LibAddToCommonIncludes("<stdio.h>")>
+    %<LibAddToCommonIncludes("<stdlib.h>")>
+    %<LibAddToCommonIncludes("<stdint.h>")>
 %endfunction
 
-
-%% Start
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block width   SFcnParamSettings.Width
+    %addtorecord block height  SFcnParamSettings.Height
+    %addtorecord block fps     SFcnParamSettings.Fps
+    %addtorecord block encoder SFcnParamSettings.Encoder
+%endfunction
 
 %function Start(block, system) Output
+    %assign W   = CAST("Number", block.width)
+    %assign H   = CAST("Number", block.height)
+    %assign FPS = CAST("Number", block.fps)
+    %assign ENC = block.encoder
 
-  %assign Width = CAST("Number", SFcnParamSettings.Width)
+    %openfile stream_decl
+    static FILE *stream_pipe = NULL;
 
-  %assign Height = CAST("Number", SFcnParamSettings.Height)
-
-  %assign FPS = CAST("Number", SFcnParamSettings.Fps)
-
-  %assign Encoder = SFcnParamSettings.Encoder
-
-
-  %openfile stream_decl
-
-  static FILE *stream_pipe = NULL;
-
-  void StreamFrame(const uint8_t *R, const uint8_t *G, const uint8_t *B)
-
-  {
-
-      int W = %<Width>;
-
-      int H = %<Height>;
-
-
-      if (!stream_pipe) {
-
-          // RPI4
-
-          const char *cmd =
-
-              "ffmpeg -loglevel error "
-
-              "-f rawvideo -pix_fmt rgb24 -s %<Width>x%<Height> -r %<FPS> -i - "
-
-              "-vf format=yuv420p "
-
-              "-c:v %<Encoder> -b:v 2M -maxrate 2M -bufsize 4M "
-
-              "-f mpegts tcp://0.0.0.0:8899?listen=1";
-
-          stream_pipe = popen(cmd, "w");
-
-          if (!stream_pipe) {
-
-              perror("popen failed");
-
-              exit(1);
-
-          }
-
-      }
-
-
-      // Loop over pixels in row-major order
-
-      for (int row = 0; row < H; ++row) {
-
-          for (int col = 0; col < W; ++col) {
-
-              // Compute index in column-major format (MATLAB-style)
-
-              int idx = col * H + row;
-
-
-              fputc(R[idx], stream_pipe);
-
-              fputc(G[idx], stream_pipe);
-
-              fputc(B[idx], stream_pipe);
-
-          }
-
-      }
-
-
-      fflush(stream_pipe);
-
-  }
-
-  %closefile stream_decl
-
-  %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", stream_decl)>
-
+    void StreamFrame(const uint8_t *R, const uint8_t *G, const uint8_t *B) {
+        int w = %<W>;
+        int h = %<H>;
+        if (!stream_pipe) {
+            const char *cmd = "ffmpeg -loglevel error "
+                              "-f rawvideo -pix_fmt rgb24 -s %<W>x%<H> -r %<FPS> -i - "
+                              "-vf format=yuv420p "
+                              "-c:v %<ENC> -b:v 2M -maxrate 2M -bufsize 4M "
+                              "-f mpegts tcp://0.0.0.0:8899?listen=1";
+            stream_pipe = popen(cmd, "w");
+        }
+        if (stream_pipe) {
+            for (int row = 0; row < h; ++row) {
+                for (int col = 0; col < w; ++col) {
+                    int idx = col * h + row;
+                    fputc(R[idx], stream_pipe);
+                    fputc(G[idx], stream_pipe);
+                    fputc(B[idx], stream_pipe);
+                }
+            }
+            fflush(stream_pipe);
+        }
+    }
+    %closefile stream_decl
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", stream_decl)>
 %endfunction
-
-
-%% Outputs
 
 %function Outputs(block, system) Output
-
-  %assign r_ptr = LibBlockInputSignalAddr(0, "", "", 0)
-
-  %assign g_ptr = LibBlockInputSignalAddr(1, "", "", 0)
-
-  %assign b_ptr = LibBlockInputSignalAddr(2, "", "", 0)
-
-
-  const uint8_t *r_stream = (const uint8_t *)%<r_ptr>;
-
-  const uint8_t *g_stream = (const uint8_t *)%<g_ptr>;
-
-  const uint8_t *b_stream = (const uint8_t *)%<b_ptr>;
-
-
-  StreamFrame(r_stream, g_stream, b_stream);
-
+    %assign r_ptr = LibBlockInputSignalAddr(0, "", "", 0)
+    %assign g_ptr = LibBlockInputSignalAddr(1, "", "", 0)
+    %assign b_ptr = LibBlockInputSignalAddr(2, "", "", 0)
+    StreamFrame((const uint8_t *)%<r_ptr>, (const uint8_t *)%<g_ptr>, (const uint8_t *)%<b_ptr>);
 %endfunction
 
-
-
-%% Terminate
-
 %function Terminate(block, system) Output
-
-%endfunction 
+    if (stream_pipe) {
+        pclose(stream_pipe);
+        stream_pipe = NULL;
+    }
+%endfunction

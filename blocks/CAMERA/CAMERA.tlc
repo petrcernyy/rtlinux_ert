@@ -1,60 +1,57 @@
 %implements CAMERA "C"
 
-%% Setup
 %function BlockTypeSetup(block, system) void
-  %<LibAddToCommonIncludes("camera_wrapper.h")>
-  %<LibAddToCommonIncludes("<stdint.h>")>
-  %<LibAddToCommonIncludes("<string.h>")>
-  %<LibAddToCommonIncludes("<unistd.h>")>
+    %<LibAddToCommonIncludes("camera_wrapper.h")>
+    %<LibAddToCommonIncludes("<stdint.h>")>
+    %<LibAddToCommonIncludes("<string.h>")>
+    %<LibAddToCommonIncludes("<unistd.h>")>
 %endfunction
 
-%% Start
+%function BlockInstanceSetup(block, system) void
+    %addtorecord block deviceId SFcnParamSettings.Device_Id
+    %addtorecord block width    SFcnParamSettings.WIDTH
+    %addtorecord block height   SFcnParamSettings.HEIGHT
+    %addtorecord block format   SFcnParamSettings.Format
+%endfunction
+
 %function Start(block, system) Output
-  %assign DEVICE_ID = CAST("Number", SFcnParamSettings.Device_Id)
-  %assign WIDTH     = CAST("Number", SFcnParamSettings.WIDTH)
-  %assign HEIGHT    = CAST("Number", SFcnParamSettings.HEIGHT)
-  %assign FORMAT    = SFcnParamSettings.Format
-  %assign CHANNELS  = 3
-  %assign FRAMEBYTES = WIDTH * HEIGHT * CHANNELS
+    %assign W = CAST("Number", block.width)
+    %assign H = CAST("Number", block.height)
+    %assign FB = W * H * 3
 
-  %openfile decbuf
-  enum {
-    CAM_WIDTH = %<WIDTH>,
-    CAM_HEIGHT = %<HEIGHT>,
-    CAM_CH = %<CHANNELS>,
-    CAM_FRAMEBYTES = %<FRAMEBYTES>
-  };
-  static uint8_t cam_frame_buf[CAM_FRAMEBYTES];
-  %closefile decbuf
-  %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", decbuf)>
+    %openfile decbuf
+    static uint8_t cam_frame_buf_%<W>x%<H>[%<FB>];
+    %closefile decbuf
+    %<LibSetSourceFileSection(LibGetModelDotCFile(), "Declarations", decbuf)>
 
-  CameraConfig cfg;
-  cfg.deviceIndex  = %<DEVICE_ID>;
-  cfg.cameraId     = "";            /* use deviceIndex */
-  cfg.width        = %<WIDTH>;
-  cfg.height       = %<HEIGHT>;
-  cfg.pixelFormat  = "%<FORMAT>";
-
-  (void)camera_wrapper_init(&cfg);
-  usleep(1000000); /* warm-up */
+    {
+        CameraConfig cfg;
+        cfg.deviceIndex  = %<CAST("Number", block.deviceId)>;
+        cfg.cameraId     = "";
+        cfg.width        = %<W>;
+        cfg.height       = %<H>;
+        cfg.pixelFormat  = "%<block.format>";
+        camera_wrapper_init(&cfg);
+        usleep(1000000);
+    }
 %endfunction
 
-%% Outputs
 %function Outputs(block, system) Output
-  size_t sz = 0;
-  const uint8_t *src = camera_wrapper_get_latest(&sz);
-  if (src && sz >= CAM_FRAMEBYTES) {
-    memcpy(cam_frame_buf, src, CAM_FRAMEBYTES);
-  }
-  {
-    %assign outPtr = LibBlockOutputSignalAddr(0, "", "", 0)   %% 4 args, no 'block'
-    uint8_T *y0 = (uint8_T *)%<outPtr>;
-    memcpy(y0, cam_frame_buf, CAM_FRAMEBYTES);
-  }
+    %assign W = CAST("Number", block.width)
+    %assign H = CAST("Number", block.height)
+    %assign FB = W * H * 3
+    %assign outPtr = LibBlockOutputSignalAddr(0, "", "", 0)
+
+    {
+        size_t sz = 0;
+        const uint8_t *src = camera_wrapper_get_latest(&sz);
+        if (src && sz >= %<FB>) {
+            memcpy(cam_frame_buf_%<W>x%<H>, src, %<FB>);
+        }
+        memcpy((uint8_T *)%<outPtr>, cam_frame_buf_%<W>x%<H>, %<FB>);
+    }
 %endfunction
 
-
-%% Terminate
 %function Terminate(block, system) Output
-  camera_wrapper_stop();
+    camera_wrapper_stop();
 %endfunction

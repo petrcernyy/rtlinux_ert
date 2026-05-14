@@ -85,7 +85,7 @@ function rtlinux_ert_make_rtw_hook(hookMethod, modelName, ~, ~, ~, ~)
             end
 
         case 'after_make'
-            disp('### Deployment Sequence...');
+            disp('### Deployment Sequence (Using Pi-side run script)...');
             outFile = fullfile(pwd, 'build', 'rt_main');
             
             if ~isfile(outFile)
@@ -93,61 +93,57 @@ function rtlinux_ert_make_rtw_hook(hookMethod, modelName, ~, ~, ~, ~)
                 return;
             end
 
-            % --- 1. PARSE PARAMETERS SAFELY ---
-            IP_Address = get_param(modelName, 'LINUX_IP_Address');
-            Username   = get_param(modelName, 'LINUX_Username'); 
-            Password   = get_param(modelName, 'LINUX_Password'); 
-            Path       = get_param(modelName, 'LINUX_Path');
+            % --- 1. PARSE PARAMETERS ---
+            IP_Address = strtrim(get_param(modelName, 'LINUX_IP_Address'));
+            Username   = strtrim(get_param(modelName, 'LINUX_Username')); 
+            Password   = strtrim(get_param(modelName, 'LINUX_Password')); 
+            Path       = strtrim(get_param(modelName, 'LINUX_Path'));
             tfliteRaw  = get_param(modelName, 'TFLITE_Enable');
             coresRaw   = get_param(modelName, 'Linux_CoreIsolation');
 
-            % Clean up Cores input
             coresStr = regexprep(char(string(coresRaw)), '[\[\]]', '');
             cores = regexprep(strtrim(coresStr), '[\s,]+', ',');
-            
-            % Check TFLite Enable
             tfliteEnable = any(strcmpi(string(tfliteRaw), ["on", "true", "1"]));
 
             % --- 2. CONSTRUCT DEPLOYMENT COMMANDS ---
+            sshFlags = '-n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
+            scpFlags = '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
+            
             cmds = {
-                'set -e'
-                'echo "1. Uploading executable..."'
-                sprintf('sshpass -p "%s" ssh -o StrictHostKeyChecking=no %s@%s "rm -f %s/rt_main"', Password, Username, IP_Address, Path)
-                sprintf('sshpass -p "%s" scp -o StrictHostKeyChecking=no "%s" %s@%s:%s/rt_main', Password, toWSL(outFile), Username, IP_Address, Path)
-                sprintf('sshpass -p "%s" ssh -o StrictHostKeyChecking=no %s@%s "chmod +x %s/rt_main"', Password, Username, IP_Address, Path)
+                'set -ex' 
+                'echo "1. Stopping old process and Uploading executable..."'
+                
+                % NEW LINE: Kill the old process first. "|| true" ensures the script doesn't fail if the app isn't running yet.
+                sprintf('sshpass -p "%s" ssh %s %s@%s "echo \\"%s\\" | sudo -S pkill -9 rt_main || true"', Password, sshFlags, Username, IP_Address, Password)
+                
+                sprintf('sshpass -p "%s" ssh %s %s@%s "mkdir -p %s"', Password, sshFlags, Username, IP_Address, Path)
+                sprintf('sshpass -p "%s" scp %s "%s" %s@%s:%s/rt_main', Password, scpFlags, toWSL(outFile), Username, IP_Address, Path)
+                sprintf('sshpass -p "%s" ssh %s %s@%s "chmod +x %s/rt_main"', Password, sshFlags, Username, IP_Address, Path)
             };
 
-            % Append TFLite Upload (if enabled)
             if tfliteEnable
                 modelFile = fullfile(fileparts(pwd), get_param(modelName, 'TF_ModelName'));
-                if ~isfile(modelFile)
-                    error('TFLite model not found at: %s', modelFile);
-                end
                 modelNameOnly = get_param(modelName, 'TF_ModelName');
-                
-                cmds{end+1} = 'echo "   ... Uploading TFLite model"';
-                cmds{end+1} = sprintf('sshpass -p "%s" scp -o StrictHostKeyChecking=no "%s" %s@%s:%s/%s', Password, toWSL(modelFile), Username, IP_Address, Path, modelNameOnly);
+                cmds{end+1} = sprintf('sshpass -p "%s" scp %s "%s" %s@%s:%s/%s', Password, scpFlags, toWSL(modelFile), Username, IP_Address, Path, modelNameOnly);
             end
 
-            % Append Launch Command
-            cmds{end+1} = 'echo "2. Launching Application with Isolation..."';
-            cmds{end+1} = sprintf('sshpass -p "%s" ssh -o StrictHostKeyChecking=no %s@%s "cd %s && echo \\"%s\\" | sudo -S -b ./setup_isolation.sh \\"%s\\" --run chrt -f 90 ./rt_main > /dev/null 2>&1"', Password, Username, IP_Address, Path, Password, cores);
-            cmds{end+1} = sprintf('echo "### Success! App is running on cores: %s"', cores);
-
-            % --- 3. EXECUTE DEPLOYMENT SCRIPT VIA WSL (BASE64 TRICK) ---
-            disp('### Executing Deployment Script in WSL...');
+            % --- 3. THE CLEAN LAUNCH ---
+            % Instead of a long string, we just call the script you baked into Yocto
+            % Syntax: /usr/bin/run_model.sh <cores> <app_working_dir> <app_binary_name>
+            cmds{end+1} = 'echo "2. Launching via Pi-side script..."';
+            launchCmd = sprintf('echo "%s" | sudo -S /usr/bin/run_model.sh "%s" "%s" "rt_main"', ...
+                                Password, cores, Path);
             
+            cmds{end+1} = sprintf('sshpass -p "%s" ssh %s %s@%s "%s"', Password, sshFlags, Username, IP_Address, launchCmd);
+            cmds{end+1} = sprintf('echo "### Success! App is running on cores: %s"', cores);
+            
+            % --- 4. EXECUTE VIA WSL ---
             bashScript = strjoin(cmds, char(10));
             b64Script = char(matlab.net.base64encode(bashScript));
-            wslCmd = sprintf('wsl --cd ~ -e bash -c "echo %s | base64 -d | bash"', b64Script);
+            wslCmd = sprintf('wsl --cd ~ -e bash -c "echo %s | base64 -d | bash -ex"', b64Script);
             
             runStatus = system(wslCmd);
-
-            if runStatus ~= 0
-                error('Deployment script failed. Check output above.');
-            else
-                disp(['### App is running! Check with: ssh ' Username '@' IP_Address ' "htop"']);
-            end
+            if runStatus ~= 0, error('Deployment failed.'); end
 
         case 'exit'
             disp(['### Successful completion of build procedure for model: ', modelName]);
